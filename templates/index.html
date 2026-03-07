@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>News Map Dashboard</title>
+    <!-- Leaflet JS Map CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+
+<body>
+    <header>
+        <h1>News Map Dashboard</h1>
+        <div class="category-filters">
+            <button class="filter-btn active" data-category="general">General</button>
+            <button class="filter-btn" data-category="politics">Politics</button>
+            <button class="filter-btn" data-category="sports">Sports</button>
+            <button class="filter-btn" data-category="technology">Technology</button>
+            <button class="filter-btn" data-category="entertainment">Entertainment</button>
+            <button class="filter-btn" data-category="health">Health</button>
+            <button class="filter-btn" data-category="business">Business</button>
+        </div>
+    </header>
+
+    <div id="map"></div>
+
+    <div class="overlay hidden" id="loading">
+        <div class="spinner"></div>
+        <p>AI is fetching and locating news...</p>
+    </div>
+
+    <!-- Leaflet JS Map Engine -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Custom Scripts -->
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>
