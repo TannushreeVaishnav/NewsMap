@@ -53,7 +53,7 @@ def fetch_and_process_news():
                     config.browser_user_agent = user_agent
                     config.request_timeout = 10
                     
-                    # 1. Scraping: Download and Parse the full article
+                    # Scraping: Download and Parse the full article
                     article = Article(url, config=config)
                     article.download()
                     article.parse()
@@ -64,13 +64,13 @@ def fetch_and_process_news():
                         print("Result: Article text was too short or blocked. Skipping.\n")
                         continue
                     
-                    # 2. Extract NLP features (Built-in keyword extraction and summary)
+                    # Extract NLP features
                     article.nlp()
                     
                     summary = article.summary
                     keywords = article.keywords
                     
-                    # Formatting the output nicely
+                    # Formatting the output
                     print(f"\n[*] Extracted Keywords: {', '.join(keywords[:5])}")
                     print(f"[*] Quick Summary:\n {summary[:500]}...\n")
                     

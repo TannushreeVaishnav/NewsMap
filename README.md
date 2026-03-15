@@ -9,7 +9,7 @@ I built this project to bridge the gap between heavy, text-dense news aggregator
 
 ---
 
-## 🚀 Key Features
+## Key Features
 
 * **Interactive Global Mapping:** Replaced traditional list-based feeds with a dynamic `Leaflet.js` map. News articles are rendered as color-coded pins based on their category (Technology, Politics, Health, etc.).
 * **AI/NLP Processing Pipeline:** Uses `spaCy` (Named Entity Recognition) to scan article titles and summaries, automatically pinpointing the primary geographic region (GPE) being discussed.
@@ -72,13 +72,13 @@ Create a `.env` file in the root directory and add your NewsAPI key:
 NEWS_API_KEY=your_api_key_here
 ```
 
-**3. Run via Docker **
+**3. Run via Docker**
 ```bash
 docker build -t geo-news-dashboard .
 docker run -p 5000:5000 --env-file .env geo-news-dashboard
 ```
 
-**4. Or Run Manually (Python)**
+**4. Or Run Manually using Python**
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: .\venv\Scripts\activate

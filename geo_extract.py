@@ -103,7 +103,7 @@ def fetch_and_process_geo_news():
                     
                     print(f"\n[*] Quick Summary:\n {article.summary[:300]}...\n")
                     
-                    # === STEP 3: Geographic Extraction ===
+                    #Geographic Extraction
                     print("Status: Pinpointing Geographic Location...")
                     location_info = extract_primary_location(full_text)
                     

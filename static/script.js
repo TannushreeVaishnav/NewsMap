@@ -1,4 +1,4 @@
-// 1. Initialize the Leaflet Map
+// Initialize the Leaflet Map
 // Set default view to focus on India!
 const map = L.map('map').setView([20.5937, 78.9629], 5);
 
@@ -12,7 +12,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
 // Layer Group to hold all our news markers
 const newsMarkers = L.layerGroup().addTo(map);
 
-// 2. Configuration for Categories (Colors and Icons)
+// Configuration for Categories (Colors and Icons)
 const categoryConfig = {
     general: { color: "#3498db", icon: "fa-globe" },
     politics: { color: "#e74c3c", icon: "fa-landmark" },
@@ -44,11 +44,11 @@ function createCustomMarker(category) {
         html: svgIcon,
         iconSize: [35, 45],
         iconAnchor: [17.5, 45],
-        popupAnchor: [0, -40] // Makes popup open exactly above the point
+        popupAnchor: [0, -40]
     });
 }
 
-// 3. Fetch Data from our Flask API
+// Fetch Data from our Flask API
 function fetchNewsData(category) {
     // Show Loading Spinner
     document.getElementById('loading').classList.remove('hidden');
@@ -109,7 +109,7 @@ function fetchNewsData(category) {
                             </div>
                         `;
 
-                        // Bind it to the marker
+
                         marker.bindPopup(popupContent);
                         newsMarkers.addLayer(marker);
                     }
@@ -128,7 +128,7 @@ function fetchNewsData(category) {
         });
 }
 
-// 4. Handle Button Clicks on the Category Menu
+// Handle Button Clicks on the Category Menu
 document.querySelectorAll('.filter-btn').forEach(button => {
     button.addEventListener('click', (event) => {
         // Remove Active color from all buttons
@@ -143,7 +143,7 @@ document.querySelectorAll('.filter-btn').forEach(button => {
     });
 });
 
-// 5. Run Initial Data Fetch on Page Load
+// Run Initial Data Fetch on Page Load
 window.addEventListener('load', () => {
     fetchNewsData('general');
 });
