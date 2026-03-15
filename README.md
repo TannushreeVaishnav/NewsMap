@@ -5,7 +5,6 @@ An interactive, full-stack web application that fetches live breaking news, proc
 
 I built this project to bridge the gap between heavy, text-dense news aggregators and spatial data visualization, giving users an instant "birds-eye view" of world events.
 
-![Map Dashboard Preview](preview.png)
 
 ---
 
