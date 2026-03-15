@@ -11,6 +11,12 @@ import concurrent.futures
 from datetime import datetime, timedelta
 import threading
 import time
+import logging
+
+# Configure production-ready logging
+logging.basicConfig(level=logging.INFO, 
+                    format='[%(asctime)s] %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # NLTK punkt is required for newspaper3k's built-in summarization feature
 try:
@@ -29,15 +35,23 @@ CORS(app)
 
 # Simple in-memory cache
 NEWS_CACHE = {}
-CACHE_TIMEOUT = timedelta(minutes=30) # Cache news for 30 minutes
+CACHE_TIMEOUT = timedelta(hours=4) # Cache news for 4 hours to avoid API limits
+
+# Application Metrics Tracker
+APP_METRICS = {
+    "total_requests": 0,
+    "cache_hits": 0,
+    "api_errors": 0,
+    "start_time": datetime.now().isoformat()
+}
 
 # Load AI Models globally so they only load once when the server starts up
-print("[INFO] Initializing Spacy and Geo models...")
+logger.info("Initializing Spacy and Geo models...")
 try:
     nlp = spacy.load("en_core_web_sm")
     geolocator = Nominatim(user_agent="geo_news_dashboard_flask_api")
 except Exception as e:
-    print(f"Error loading models: {e}")
+    logger.error(f"Error loading models: {e}")
 
 def extract_primary_location(summary, title=""):
     """ Helper Function: Extracts Geo location using SpaCy and Geopy 
@@ -58,7 +72,7 @@ def extract_primary_location(summary, title=""):
     most_common_location = Counter(locations).most_common(1)[0][0]
     
     try:
-        # Ask the Geocoder to specifically return the English version of the location name
+        # Geocoder to specifically return the English version of the location name
         location_data = geolocator.geocode(most_common_location, language='en')
         if location_data:
             return {
@@ -75,6 +89,31 @@ def extract_primary_location(summary, title=""):
 def home():
     """ Serve the stunning interactive Map Dashboard """
     return render_template('index.html')
+
+@app.before_request
+def start_timer():
+    request.start_time = time.time()
+    if request.path.startswith('/api/'):
+        APP_METRICS["total_requests"] += 1
+
+@app.after_request
+def log_request(response):
+    if request.path.startswith('/api/'):
+        duration = time.time() - request.start_time
+        logger.info(f"Method: {request.method} | Path: {request.path} | Status: {response.status_code} | Duration: {duration:.3f}s")
+    return response
+
+@app.route('/metrics', methods=['GET'])
+def get_metrics():
+    """ API Endpoint for Server Health and Monitoring """
+    metrics = APP_METRICS.copy()
+    metrics["cache_size"] = len(NEWS_CACHE)
+    metrics["uptime_seconds"] = (datetime.now() - datetime.fromisoformat(APP_METRICS["start_time"])).total_seconds()
+    
+    return jsonify({
+        "status": "healthy",
+        "metrics": metrics
+    })
 
 def fetch_category_data(category):
     """ Core processing function: fetches, scrapes, summarizes and geo-tags articles for a given category. """
@@ -100,8 +139,9 @@ def fetch_category_data(category):
             if response['status'] == 'ok' and len(response['articles']) < 5:
                 response = newsapi.get_top_headlines(language='en', category=valid_category, page_size=15)
         
-        if response['status'] != 'ok':
-            return {"error": "Failed to fetch from NewsAPI"}
+        if response.get('status') != 'ok':
+            logger.error(f"NewsAPI Error: {response}")
+            return {"error": response.get('message', "Failed to fetch from NewsAPI")}
             
         articles_data = response['articles']
         
@@ -123,13 +163,13 @@ def fetch_category_data(category):
                 if published_at:
                     pub_date = datetime.fromisoformat(published_at.replace('Z', '+00:00')).replace(tzinfo=None)
                     if pub_date < filter_start_time:
-                        print(f"[-] Dropping old news: '{title}' ({published_at})")
+                        logger.info(f"Dropping old news: '{title}' ({published_at})")
                         return None
             except Exception:
                 pass
             
             try:
-                # 1. Scrape it
+                # Scrape it
                 article = Article(url, config=config)
                 article.download()
                 article.parse()
@@ -138,15 +178,15 @@ def fetch_category_data(category):
                 if len(article.text) < 150:
                     return None
                     
-                # 2. Summarize it
+                # Summarize it
                 article.nlp()
                 summary = article.summary
                 keywords = article.keywords
                 
-                # 3. Geo-Tag it using the Title and Summary instead of full text
+                # Geo-Tag it using the Title and Summary instead of full text
                 location_info = extract_primary_location(summary, title)
                 
-                # 4. Package it into our clean dictionary
+                # Package it into our clean dictionary
                 return {
                     "title": title,
                     "url": url,
@@ -159,7 +199,7 @@ def fetch_category_data(category):
                 }
                 
             except Exception as e:
-                print(f"[-] Skipped '{title}' due to error: {e}")
+                logger.warning(f"Skipped '{title}' due to error: {e}")
                 return None
 
         # Process articles concurrently to dramatically reduce loading time
@@ -200,20 +240,22 @@ def get_news():
     # Grab the category from the URL (default to general news)
     category = request.args.get('category', 'general')
     
-    print(f"\n[GET] Request received for category: {category}")
+    logger.info(f"Request received for category: {category}")
     
     # --- CHECK CACHE FIRST ---
     now = datetime.now()
     if category in NEWS_CACHE:
         cached_data = NEWS_CACHE[category]
         if now - cached_data['timestamp'] < CACHE_TIMEOUT:
-            print(f"[*] Returning INSTANTLY from cache for category: {category}")
+            logger.info(f"Returning INSTANTLY from cache for category: {category}")
+            APP_METRICS["cache_hits"] += 1
             return jsonify(cached_data['data'])
     # -------------------------
     
     # If not in cache or expired, fetch it live
     response_data = fetch_category_data(category)
     if "error" in response_data:
+        APP_METRICS["api_errors"] += 1
         return jsonify(response_data), 500
         
     return jsonify(response_data)
@@ -221,7 +263,7 @@ def get_news():
 def run_background_prefetch():
     """ Background thread logic that pre-downloads all categories into cache """
     categories = ['general', 'politics', 'sports', 'technology', 'entertainment', 'health', 'business']
-    print("\n[BACKGROUND THREAD] Starting eager cache prefetching system...")
+    logger.info("Starting eager cache prefetching system daemon...")
     
     # Also loop infinitely every 30 mins to keep data fresh implicitly without user trigger
     while True:
@@ -229,20 +271,19 @@ def run_background_prefetch():
             now = datetime.now()
             # If not in cache or expired, fetch it
             if cat not in NEWS_CACHE or (now - NEWS_CACHE[cat]['timestamp'] > CACHE_TIMEOUT):
-                print(f"[BACKGROUND THREAD] Pre-fetching '{cat}' news into cache...")
+                logger.info(f"Pre-fetching '{cat}' news into cache...")
                 fetch_category_data(cat)
-                time.sleep(2) # Sleep 2 seconds between categories to avoid overloading API limits
+                time.sleep(5) # Sleep 5 seconds between categories to avoid overloading API limits
         
-        print("[BACKGROUND THREAD] System map is fully armed and cached! Waiting 30 minutes for next refresh.\n")
-        time.sleep(1800) # Sleep for 30 minutes before next background refresh sweep
+        logger.info("System map is fully armed! Waiting 4 hours for next refresh.")
+        time.sleep(14400) # Sleep for 4 hours before next background refresh sweep
 
 if __name__ == '__main__':
     # Start the continuous Background Pre-Fetching thread daemon
     prefetch_thread = threading.Thread(target=run_background_prefetch, daemon=True)
     prefetch_thread.start()
 
-    print("\n" + "="*50)
-    print("FLASK BACKEND RUNNING ON http://127.0.0.1:5000")
-    print("="*50 + "\n")
-    #app.run(debug=True, host='127.0.0.1', port=5000)
+    logger.info("="*50)
+    logger.info("FLASK BACKEND RUNNING ON http://127.0.0.1:5000")
+    logger.info("="*50)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)

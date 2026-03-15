@@ -3,9 +3,8 @@ newsapi-python==0.2.7
 newspaper3k==0.2.8
 requests==2.31.0
 python-dotenv==1.0.0
-transformers
-torch
 lxml_html_clean
 spacy
 geopy
 flask-cors
+gunicorn
