@@ -7,6 +7,10 @@ import nltk
 import spacy
 from geopy.geocoders import Nominatim
 from collections import Counter
+import concurrent.futures
+from datetime import datetime, timedelta
+import threading
+import time
 
 # NLTK punkt is required for newspaper3k's built-in summarization feature
 try:
@@ -23,6 +27,10 @@ app = Flask(__name__)
 from flask_cors import CORS
 CORS(app)
 
+# Simple in-memory cache
+NEWS_CACHE = {}
+CACHE_TIMEOUT = timedelta(minutes=30) # Cache news for 30 minutes
+
 # Load AI Models globally so they only load once when the server starts up
 print("[INFO] Initializing Spacy and Geo models...")
 try:
@@ -31,10 +39,18 @@ try:
 except Exception as e:
     print(f"Error loading models: {e}")
 
-def extract_primary_location(text):
-    """ Helper Function: Extracts Geo location using SpaCy and Geopy """
-    doc = nlp(text)
-    locations = [ent.text for ent in doc.ents if ent.label_ == "GPE"]
+def extract_primary_location(summary, title=""):
+    """ Helper Function: Extracts Geo location using SpaCy and Geopy 
+        Prioritizes the Title and Summary to avoid noise from full text.
+    """
+    title_doc = nlp(title)
+    title_locations = [ent.text for ent in title_doc.ents if ent.label_ == "GPE"]
+    
+    summary_doc = nlp(summary)
+    summary_locations = [ent.text for ent in summary_doc.ents if ent.label_ == "GPE"]
+    
+    # Give the Title 3x weight since it usually contains the primary subject
+    locations = (title_locations * 3) + summary_locations
     
     if not locations:
         return None
@@ -60,40 +76,34 @@ def home():
     """ Serve the stunning interactive Map Dashboard """
     return render_template('index.html')
 
-@app.route('/api/news', methods=['GET'])
-def get_news():
-    """ 
-    API Endpoint: http://localhost:5000/api/news?category=technology 
-    Returns summarized and geo-tagged news as JSON.
-    """
-    # Grab the category from the URL (default to general news)
-    category = request.args.get('category', 'general')
+def fetch_category_data(category):
+    """ Core processing function: fetches, scrapes, summarizes and geo-tags articles for a given category. """
     newsapi = NewsApiClient(api_key=API_KEY)
-    
-    print(f"\n[GET] Request received for category: {category}")
     
     try:
         # NewsAPI built-in categories do not include "politics"
         valid_category = category if category in ['business', 'entertainment', 'general', 'health', 'science', 'sports', 'technology'] else 'general'
         
+        # Calculate date limit so we only show news from Yesterday and Today
+        yesterday_dt = datetime.now() - timedelta(days=1)
+        yesterday_str = yesterday_dt.strftime('%Y-%m-%d')
+        filter_start_time = yesterday_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        
         # If the user clicks Politics, we have to search for it manually using keywords
         if category == 'politics':
-            response = newsapi.get_everything(q='india politics', language='en', sort_by='relevancy', page_size=10)
+            response = newsapi.get_everything(q='india politics', language='en', sort_by='relevancy', page_size=15, from_param=yesterday_str)
         else:
             # Try getting Indian specific headlines first
-            response = newsapi.get_top_headlines(language='en', country='in', category=valid_category, page_size=10)
+            response = newsapi.get_top_headlines(language='en', country='in', category=valid_category, page_size=15)
             
-            # If not enough breaking Indian news in this category, we ask the 'Everything' API to grab from BBC, Times of India, etc.
+            # If not enough breaking Indian news in this category, fallback to global top headlines for this exact category
             if response['status'] == 'ok' and len(response['articles']) < 5:
-                # We append "india" to the category word to force the API to give us Indian results
-                search_query = f"india {valid_category}"
-                response = newsapi.get_everything(q=search_query, language='en', sort_by='relevancy', page_size=10)
+                response = newsapi.get_top_headlines(language='en', category=valid_category, page_size=15)
         
         if response['status'] != 'ok':
-            return jsonify({"error": "Failed to fetch from NewsAPI"}), 500
+            return {"error": "Failed to fetch from NewsAPI"}
             
         articles_data = response['articles']
-        processed_news = []
         
         # Fake User-Agent to prevent getting blocked by anti-scraping websites
         user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36'
@@ -101,12 +111,22 @@ def get_news():
         config.browser_user_agent = user_agent
         config.request_timeout = 10
         
-        # Loop through each article and pass it through our pipeline
-        for article_data in articles_data:
+        def process_single_article(article_data):
             url = article_data['url']
             title = article_data['title']
             image_url = article_data.get('urlToImage', '')
             source = article_data.get('source', {}).get('name', 'Unknown')
+            published_at = article_data.get('publishedAt', '')
+            
+            # Filter out old news (older than yesterday)
+            try:
+                if published_at:
+                    pub_date = datetime.fromisoformat(published_at.replace('Z', '+00:00')).replace(tzinfo=None)
+                    if pub_date < filter_start_time:
+                        print(f"[-] Dropping old news: '{title}' ({published_at})")
+                        return None
+            except Exception:
+                pass
             
             try:
                 # 1. Scrape it
@@ -116,43 +136,111 @@ def get_news():
                 
                 # If paywalled or too short, skip it
                 if len(article.text) < 150:
-                    continue
+                    return None
                     
                 # 2. Summarize it
                 article.nlp()
                 summary = article.summary
                 keywords = article.keywords
                 
-                # 3. Geo-Tag it
-                location_info = extract_primary_location(article.text)
+                # 3. Geo-Tag it using the Title and Summary instead of full text
+                location_info = extract_primary_location(summary, title)
                 
                 # 4. Package it into our clean dictionary
-                processed_news.append({
+                return {
                     "title": title,
                     "url": url,
                     "image_url": image_url,
                     "source": source,
+                    "published_at": published_at,
                     "summary": summary,
                     "keywords": keywords[:5],
                     "location": location_info
-                })
+                }
                 
             except Exception as e:
                 print(f"[-] Skipped '{title}' due to error: {e}")
-                continue
+                return None
+
+        # Process articles concurrently to dramatically reduce loading time
+        processed_news = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            # We map the process function to our data list
+            future_results = executor.map(process_single_article, articles_data)
+            
+            for result in future_results:
+                if result is not None:
+                    processed_news.append(result)
                 
         # Send json back to the web frontend
-        return jsonify({
+        response_data = {
             "status": "success",
             "category": category,
             "total_results": len(processed_news),
             "articles": processed_news
-        })
+        }
+        
+        # Save to cache before returning
+        NEWS_CACHE[category] = {
+            'timestamp': datetime.now(),
+            'data': response_data
+        }
+        
+        return response_data
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}
+
+@app.route('/api/news', methods=['GET'])
+def get_news():
+    """ 
+    API Endpoint: http://localhost:5000/api/news?category=technology 
+    Returns summarized and geo-tagged news as JSON.
+    """
+    # Grab the category from the URL (default to general news)
+    category = request.args.get('category', 'general')
+    
+    print(f"\n[GET] Request received for category: {category}")
+    
+    # --- CHECK CACHE FIRST ---
+    now = datetime.now()
+    if category in NEWS_CACHE:
+        cached_data = NEWS_CACHE[category]
+        if now - cached_data['timestamp'] < CACHE_TIMEOUT:
+            print(f"[*] Returning INSTANTLY from cache for category: {category}")
+            return jsonify(cached_data['data'])
+    # -------------------------
+    
+    # If not in cache or expired, fetch it live
+    response_data = fetch_category_data(category)
+    if "error" in response_data:
+        return jsonify(response_data), 500
+        
+    return jsonify(response_data)
+
+def run_background_prefetch():
+    """ Background thread logic that pre-downloads all categories into cache """
+    categories = ['general', 'politics', 'sports', 'technology', 'entertainment', 'health', 'business']
+    print("\n[BACKGROUND THREAD] Starting eager cache prefetching system...")
+    
+    # Also loop infinitely every 30 mins to keep data fresh implicitly without user trigger
+    while True:
+        for cat in categories:
+            now = datetime.now()
+            # If not in cache or expired, fetch it
+            if cat not in NEWS_CACHE or (now - NEWS_CACHE[cat]['timestamp'] > CACHE_TIMEOUT):
+                print(f"[BACKGROUND THREAD] Pre-fetching '{cat}' news into cache...")
+                fetch_category_data(cat)
+                time.sleep(2) # Sleep 2 seconds between categories to avoid overloading API limits
+        
+        print("[BACKGROUND THREAD] System map is fully armed and cached! Waiting 30 minutes for next refresh.\n")
+        time.sleep(1800) # Sleep for 30 minutes before next background refresh sweep
 
 if __name__ == '__main__':
+    # Start the continuous Background Pre-Fetching thread daemon
+    prefetch_thread = threading.Thread(target=run_background_prefetch, daemon=True)
+    prefetch_thread.start()
+
     print("\n" + "="*50)
     print("FLASK BACKEND RUNNING ON http://127.0.0.1:5000")
     print("="*50 + "\n")

@@ -2,10 +2,11 @@
 // Set default view to focus on India!
 const map = L.map('map').setView([20.5937, 78.9629], 5);
 
-// Use OpenStreetMap Tiles for the base map appearance
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors',
-    maxZoom: 18,
+// Use CARTO Voyager Tiles for the base map appearance (Forces English labels globally)
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 20
 }).addTo(map);
 
 // Layer Group to hold all our news markers
@@ -84,11 +85,19 @@ function fetchNewsData(category) {
                         // Grab the correct icon class for the footer
                         const categoryIconClass = categoryConfig[category] ? categoryConfig[category].icon : 'fa-newspaper';
 
+                        let timeHtml = '';
+                        if (article.published_at) {
+                            const dateObj = new Date(article.published_at);
+                            const options = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+                            timeHtml = `<div style="font-size: 0.85em; color: #a8b2d1; margin-top: 5px;"><i class="far fa-clock"></i> ${dateObj.toLocaleString(undefined, options)}</div>`;
+                        }
+
                         const popupContent = `
                             <div class="popup-header-container">
-                                <a href="${article.url}" target="_blank" style="color:white; text-decoration:none;">
+                                <a href="${article.url}" target="_blank" style="color:white; text-decoration:none; display: block;">
                                     ${article.title}
                                 </a>
+                                ${timeHtml}
                             </div>
                             ${imageHtml}
                             <div class="popup-summary">
