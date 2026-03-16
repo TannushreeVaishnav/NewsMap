@@ -57,6 +57,11 @@ def extract_primary_location(summary, title=""):
     """ Helper Function: Extracts Geo location using SpaCy and Geopy 
         Prioritizes the Title and Summary to avoid noise from full text.
     """
+    if not title:
+        title = ""
+    if not summary:
+        summary = ""
+        
     title_doc = nlp(title)
     title_locations = [ent.text for ent in title_doc.ents if ent.label_ == "GPE"]
     
@@ -229,6 +234,8 @@ def fetch_category_data(category):
         return response_data
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"error": str(e)}
 
 @app.route('/api/news', methods=['GET'])
