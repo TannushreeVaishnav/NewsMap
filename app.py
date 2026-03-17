@@ -53,6 +53,9 @@ try:
 except Exception as e:
     logger.error(f"Error loading models: {e}")
 
+# Global lock to prevent Nominatim API rate limiting errors
+geocode_lock = threading.Lock()
+
 def extract_primary_location(summary, title=""):
     """ Helper Function: Extracts Geo location using SpaCy and Geopy 
         Prioritizes the Title and Summary to avoid noise from full text.
@@ -78,14 +81,19 @@ def extract_primary_location(summary, title=""):
     
     try:
         # Geocoder to specifically return the English version of the location name
-        location_data = geolocator.geocode(most_common_location, language='en')
+        with geocode_lock:
+            # Nominatim has a strict limit of 1 request per second
+            time.sleep(1.2) 
+            location_data = geolocator.geocode(most_common_location, language='en', timeout=10)
+            
         if location_data:
             return {
                 "name": location_data.address,
                 "lat": location_data.latitude,
                 "lon": location_data.longitude
             }
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Geocoding failed for '{most_common_location}': {e}")
         pass
         
     return None
