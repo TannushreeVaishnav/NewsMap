@@ -1,6 +1,6 @@
 # Global Geo-News Map Dashboard 
-**Live Demo:** [https://newsmap-na5y.onrender.com](https://newsmap-na5y.onrender.com)
-
+## Live Demo
+[Click here to view the demo](https://newsmap-na5y.onrender.com)
 An interactive, full-stack web application that fetches live breaking news, processes the articles using NLP to extract their geographic locations, and visualizes them on an interactive global map. 
 
 I built this project to bridge the gap between heavy, text-dense news aggregators and spatial data visualization, giving users an instant "birds-eye view" of world events.
