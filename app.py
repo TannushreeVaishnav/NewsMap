@@ -13,12 +13,11 @@ import threading
 import time
 import logging
 
-# Configure production-ready logging
+# Configure production logging
 logging.basicConfig(level=logging.INFO, 
                     format='[%(asctime)s] %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# NLTK punkt is required for newspaper3k's built-in summarization feature
 try:
     nltk.download('punkt', quiet=True)
 except Exception:
@@ -33,20 +32,10 @@ app = Flask(__name__)
 from flask_cors import CORS
 CORS(app)
 
-# Simple in-memory cache
-NEWS_CACHE = {}
+from metrics import NEWS_CACHE, APP_METRICS, APP_START_TIME
 CACHE_TIMEOUT = timedelta(hours=4) # Cache news for 4 hours to avoid API limits
 
-# Application Metrics Tracker
-APP_METRICS = {
-    "total_requests": 0,
-    "cache_hits": 0,
-    "api_errors": 0,
-    "start_time": datetime.now().isoformat()
-}
-
-# Load AI Models globally so they only load once when the server starts up
-logger.info("Initializing Spacy and Geo models...")
+logger.info("Initializing models...")
 try:
     nlp = spacy.load("en_core_web_sm")
     geolocator = Nominatim(user_agent="geo_news_dashboard_flask_api")
@@ -57,9 +46,6 @@ except Exception as e:
 geocode_lock = threading.Lock()
 
 def extract_primary_location(summary, title=""):
-    """ Helper Function: Extracts Geo location using SpaCy and Geopy 
-        Prioritizes the Title and Summary to avoid noise from full text.
-    """
     if not title:
         title = ""
     if not summary:
@@ -80,9 +66,7 @@ def extract_primary_location(summary, title=""):
     most_common_location = Counter(locations).most_common(1)[0][0]
     
     try:
-        # Geocoder to specifically return the English version of the location name
         with geocode_lock:
-            # Nominatim has a strict limit of 1 request per second
             time.sleep(1.2) 
             location_data = geolocator.geocode(most_common_location, language='en', timeout=10)
             
@@ -119,36 +103,33 @@ def log_request(response):
 @app.route('/metrics', methods=['GET'])
 def get_metrics():
     """ API Endpoint for Server Health and Monitoring """
-    metrics = APP_METRICS.copy()
-    metrics["cache_size"] = len(NEWS_CACHE)
-    metrics["uptime_seconds"] = (datetime.now() - datetime.fromisoformat(APP_METRICS["start_time"])).total_seconds()
-    
     return jsonify({
         "status": "healthy",
-        "metrics": metrics
+        "metrics": {
+            "total_requests": APP_METRICS["total_requests"],
+            "cache_hits": APP_METRICS["cache_hits"],
+            "api_errors": APP_METRICS["api_errors"],
+            "start_time": APP_START_TIME.isoformat(),
+            "cache_size": len(NEWS_CACHE),
+            "uptime_seconds": (datetime.now() - APP_START_TIME).total_seconds()
+        }
     })
 
-def fetch_category_data(category):
+def fetch_category_data(category: str):
     """ Core processing function: fetches, scrapes, summarizes and geo-tags articles for a given category. """
     newsapi = NewsApiClient(api_key=API_KEY)
     
     try:
-        # NewsAPI built-in categories do not include "politics"
         valid_category = category if category in ['business', 'entertainment', 'general', 'health', 'science', 'sports', 'technology'] else 'general'
-        
-        # Calculate date limit so we only show news from Yesterday and Today
         yesterday_dt = datetime.now() - timedelta(days=1)
         yesterday_str = yesterday_dt.strftime('%Y-%m-%d')
         filter_start_time = yesterday_dt.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # If the user clicks Politics, we have to search for it manually using keywords
         if category == 'politics':
             response = newsapi.get_everything(q='india politics', language='en', sort_by='relevancy', page_size=15, from_param=yesterday_str)
         else:
-            # Try getting Indian specific headlines first
             response = newsapi.get_top_headlines(language='en', country='in', category=valid_category, page_size=15)
             
-            # If not enough breaking Indian news in this category, fallback to global top headlines for this exact category
             if response['status'] == 'ok' and len(response['articles']) < 5:
                 response = newsapi.get_top_headlines(language='en', category=valid_category, page_size=15)
         
@@ -215,17 +196,14 @@ def fetch_category_data(category):
                 logger.warning(f"Skipped '{title}' due to error: {e}")
                 return None
 
-        # Process articles concurrently to dramatically reduce loading time
         processed_news = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            # We map the process function to our data list
             future_results = executor.map(process_single_article, articles_data)
             
             for result in future_results:
                 if result is not None:
                     processed_news.append(result)
                 
-        # Send json back to the web frontend
         response_data = {
             "status": "success",
             "category": category,
@@ -233,7 +211,6 @@ def fetch_category_data(category):
             "articles": processed_news
         }
         
-        # Save to cache before returning
         NEWS_CACHE[category] = {
             'timestamp': datetime.now(),
             'data': response_data
@@ -261,7 +238,8 @@ def get_news():
     now = datetime.now()
     if category in NEWS_CACHE:
         cached_data = NEWS_CACHE[category]
-        if now - cached_data['timestamp'] < CACHE_TIMEOUT:
+        timestamp = cached_data.get('timestamp')
+        if isinstance(timestamp, datetime) and now - timestamp < CACHE_TIMEOUT:
             logger.info(f"Returning INSTANTLY from cache for category: {category}")
             APP_METRICS["cache_hits"] += 1
             return jsonify(cached_data['data'])
@@ -276,22 +254,25 @@ def get_news():
     return jsonify(response_data)
 
 def run_background_prefetch():
-    """ Background thread logic that pre-downloads all categories into cache """
     categories = ['general', 'politics', 'sports', 'technology', 'entertainment', 'health', 'business']
-    logger.info("Starting eager cache prefetching system daemon...")
+    logger.info("Starting background daemon...")
     
-    # Also loop infinitely every 30 mins to keep data fresh implicitly without user trigger
     while True:
         for cat in categories:
             now = datetime.now()
-            # If not in cache or expired, fetch it
-            if cat not in NEWS_CACHE or (now - NEWS_CACHE[cat]['timestamp'] > CACHE_TIMEOUT):
+            is_expired = True
+            if cat in NEWS_CACHE:
+                timestamp = NEWS_CACHE[cat].get('timestamp')
+                if isinstance(timestamp, datetime):
+                    is_expired = (now - timestamp > CACHE_TIMEOUT)
+                    
+            if is_expired:
                 logger.info(f"Pre-fetching '{cat}' news into cache...")
                 fetch_category_data(cat)
-                time.sleep(5) # Sleep 5 seconds between categories to avoid overloading API limits
+                time.sleep(5)
         
-        logger.info("System map is fully armed! Waiting 4 hours for next refresh.")
-        time.sleep(14400) # Sleep for 4 hours before next background refresh sweep
+        logger.info("Waiting 4 hours for next refresh.")
+        time.sleep(14400)
 
 if __name__ == '__main__':
     # Start the continuous Background Pre-Fetching thread daemon
