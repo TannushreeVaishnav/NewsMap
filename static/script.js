@@ -38,31 +38,18 @@ function initGlobe() {
             const el = document.createElement('div');
             el.className = 'globe-marker';
             const isBreaking = isBreakingNews(d.published_at);
-            const isCluster = d.isCluster;
-
-            if (isCluster) {
-                el.innerHTML = `
-                    <div class="cluster-pin" style="border-color:${d.color};box-shadow:0 0 16px ${d.color}55;">
-                        <span style="color:${d.color}">${d.count}</span>
-                    </div>
-                    <div class="marker-label" style="background:${d.color}22;border-color:${d.color}55;color:${d.color};">
-                        ${d.locationShort}
-                    </div>`;
-            } else {
-                el.innerHTML = `
-                    ${isBreaking ? `<div class="pulse-ring" style="border-color:${d.color}"></div>` : ''}
-                    <div class="marker-pin" style="color:${d.color};font-size:30px;filter:drop-shadow(0 0 6px rgba(0,0,0,0.8));margin-top:-14px;transition:all 0.3s ease;">
-                        <i class="fas fa-map-marker-alt"></i>
-                    </div>
-                    <div class="marker-label" style="background:${d.color}22;border-color:${d.color}55;color:${d.color};margin-top:-2px;">
-                        ${d.locationShort}
-                    </div>`;
-            }
+            el.innerHTML = `
+                ${isBreaking ? `<div class="pulse-ring" style="border-color:${d.color}"></div>` : ''}
+                <div class="marker-pin" style="color:${d.color};font-size:30px;filter:drop-shadow(0 0 6px rgba(0,0,0,0.8));margin-top:-14px;transition:all 0.3s ease;">
+                    <i class="fas fa-map-marker-alt"></i>
+                </div>
+                <div class="marker-label" style="background:${d.color}22;border-color:${d.color}55;color:${d.color};margin-top:-2px;">
+                    ${d.locationShort}
+                </div>`;
             el.onpointerdown = (e) => {
                 e.stopPropagation();
                 stopAutoRotate();
-                if (isCluster) expandCluster(d);
-                else showArticlePopup(d);
+                showArticlePopup(d);
             };
             el.style.cursor = 'pointer';
             d.element = el;
@@ -152,51 +139,6 @@ function sentimentColor(score) {
     return '#ffa726';                     // neutral → amber
 }
 
-// ── PIN CLUSTERING ────────────────────────────────────────────
-function clusterPoints(points, gridDeg = 8) {
-    const grid = {};
-    points.forEach(p => {
-        const key = `${Math.round(p.lat / gridDeg)}_${Math.round(p.lng / gridDeg)}`;
-        if (!grid[key]) grid[key] = [];
-        grid[key].push(p);
-    });
-
-    const clustered = [];
-    Object.values(grid).forEach(group => {
-        if (group.length === 1) {
-            clustered.push(group[0]);
-        } else {
-            const avgLat = group.reduce((s, p) => s + p.lat, 0) / group.length;
-            const avgLng = group.reduce((s, p) => s + p.lng, 0) / group.length;
-            clustered.push({
-                lat: avgLat, lng: avgLng,
-                color: group[0].color,
-                locationShort: group[0].locationShort,
-                isCluster: true,
-                count: group.length,
-                articles: group
-            });
-        }
-    });
-    return clustered;
-}
-
-function expandCluster(clusterPoint) {
-    // Fly to cluster and list articles in popup
-    globeInstance.pointOfView({ lat: clusterPoint.lat, lng: clusterPoint.lng, altitude: 1.0 }, 800);
-    const popup = document.getElementById('article-popup');
-    document.getElementById('popup-image-wrap').innerHTML = '';
-    document.getElementById('popup-image-wrap').style.display = 'none';
-    document.getElementById('popup-title').textContent = `${clusterPoint.count} stories near ${clusterPoint.locationShort}`;
-    document.getElementById('popup-summary').innerHTML = clusterPoint.articles
-        .map(a => `<a href="${a.url}" target="_blank" style="display:block;color:#4fc3f7;margin-bottom:6px;font-size:12px;">${a.title}</a>`)
-        .join('');
-    document.getElementById('popup-source').innerHTML = '';
-    document.getElementById('popup-time').innerHTML = '';
-    document.getElementById('popup-location').innerHTML = `<i class="fas fa-layer-group"></i> ${clusterPoint.count} articles clustered`;
-    document.getElementById('popup-link').style.display = 'none';
-    popup.classList.remove('hidden');
-}
 
 // ── HIGHLIGHT MARKER ──────────────────────────────────────────
 function highlightMarker(point) {
@@ -319,11 +261,10 @@ function renderNewsData(data, category) {
         }
     });
 
-    // Spatial pin clustering for globe
-    const globePoints = clusterPoints(rawGlobePoints);
+    // Render individual pins on globe (no clustering)
     requestAnimationFrame(() => {
         nukeSceneHtmlObjects();
-        globeInstance.htmlElementsData(globePoints);
+        globeInstance.htmlElementsData(rawGlobePoints);
         globeInstance.labelsData(rawGlobePoints);
     });
 
@@ -466,17 +407,7 @@ function fetchNewsData(category) {
     document.getElementById('loading').classList.remove('hidden');
 
     fetch(`/api/news?category=${category}`)
-        .then(r => {
-            if (r.status === 304 && clientCache[category]) {
-                // Not modified — re-render from cache silently
-                if (pendingCategory === category) {
-                    document.getElementById('loading').classList.add('hidden');
-                    renderNewsData(clientCache[category], category);
-                }
-                return null;
-            }
-            return r.json();
-        })
+        .then(r => r.json())
         .then(data => {
             if (!data) return;
             if (pendingCategory === category) document.getElementById('loading').classList.add('hidden');

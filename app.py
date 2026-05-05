@@ -286,12 +286,6 @@ def get_news():
 
     if db_data and db_data["total_results"] > 0:
         APP_METRICS["cache_hits"] += 1
-        etag = db_data.get("etag", "")
-
-        # Check If-None-Match (ETag) header — skip re-render if unchanged
-        client_etag = request.headers.get("If-None-Match", "")
-        if client_etag and client_etag == etag:
-            return make_response("", 304)
 
         # If stale (older than REFRESH_INTERVAL_HOURS), refresh in background
         last_fetch = db.get_last_fetch_time(category)
@@ -301,10 +295,7 @@ def get_news():
             t.start()
 
         logger.info(f"Serving {db_data['total_results']} articles from DB for '{category}'")
-        response = make_response(jsonify(db_data))
-        if etag:
-            response.headers["ETag"] = etag
-        return response
+        return jsonify(db_data)
 
     # ── First-time fetch ──
     logger.info(f"No DB data for '{category}', performing live fetch...")
