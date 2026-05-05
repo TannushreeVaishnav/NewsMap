@@ -4,44 +4,142 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Geo-News Map | Global Breaking News Dashboard</title>
-    <!-- SEO Meta Tags for Google Search -->
-    <meta name="description" content="An interactive global map dashboard delivering categorized, AI-summarized breaking news in real-time. View live headlines dynamically pinned to their geographic locations.">
-    <meta name="keywords" content="global news, news map, breaking news tracker, interactive news dashboard, geo news, live world news">
+    <title>Geo-News Globe | 3D Global Breaking News</title>
+    <meta name="description" content="An interactive 3D globe dashboard delivering categorized, AI-summarized breaking news. View live headlines pinned to their geographic locations on a stunning dark globe.">
+    <meta name="keywords" content="global news, 3d news globe, breaking news tracker, interactive news dashboard, geo news, live world news">
     <meta name="author" content="Geo-News Dashboard">
-    <!-- Leaflet JS Map CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Google Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <!-- FontAwesome for Icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
     <!-- Custom Styles -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=22" />
 </head>
 
 <body>
-    <header>
-        <h1>News Map Dashboard</h1>
-        <div class="category-filters">
-            <button class="filter-btn active" data-category="general">General</button>
-            <button class="filter-btn" data-category="politics">Politics</button>
-            <button class="filter-btn" data-category="sports">Sports</button>
-            <button class="filter-btn" data-category="technology">Technology</button>
-            <button class="filter-btn" data-category="entertainment">Entertainment</button>
-            <button class="filter-btn" data-category="health">Health</button>
-            <button class="filter-btn" data-category="business">Business</button>
+    <!-- ══ GLASSMORPHISM NAVBAR ══ -->
+    <nav id="top-nav">
+        <!-- Brand -->
+        <div class="nav-brand">
+            <i class="fas fa-globe-americas globe-icon"></i>
+            <h1>Geo<span class="brand-accent">News</span></h1>
         </div>
-    </header>
 
-    <div id="map"></div>
+        <!-- Live Indicator -->
+        <div class="nav-live-badge">
+            <span class="live-dot"></span>
+            <span>LIVE</span>
+        </div>
 
-    <div class="overlay hidden" id="loading">
-        <div class="spinner"></div>
-        <p>AI is fetching and locating news...</p>
+        <!-- Category Filters -->
+        <div class="category-filters" id="category-filters">
+            <button class="filter-btn active" data-category="general"><i class="fas fa-globe"></i> General</button>
+            <button class="filter-btn" data-category="politics"><i class="fas fa-landmark"></i> Politics</button>
+            <button class="filter-btn" data-category="sports"><i class="fas fa-futbol"></i> Sports</button>
+            <button class="filter-btn" data-category="technology"><i class="fas fa-microchip"></i> Tech</button>
+            <button class="filter-btn" data-category="entertainment"><i class="fas fa-film"></i> Entertainment</button>
+            <button class="filter-btn" data-category="health"><i class="fas fa-heartbeat"></i> Health</button>
+            <button class="filter-btn" data-category="business"><i class="fas fa-briefcase"></i> Business</button>
+        </div>
+    </nav>
+
+    <!-- ══ LIVE TICKER STRIP ══ -->
+    <div id="news-ticker-bar">
+        <div class="ticker-label"><i class="fas fa-rss"></i> BREAKING</div>
+        <div class="ticker-track-wrap">
+            <div class="ticker-track" id="ticker-track">
+                <span class="ticker-loading">Fetching live headlines…</span>
+            </div>
+        </div>
     </div>
 
-    <!-- Leaflet JS Map Engine -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- ══ MAIN CONTENT ══ -->
+    <div id="main-container">
+        <!-- 3D Globe -->
+        <div id="globe-container"></div>
+
+        <!-- Floating Article Popup -->
+        <div id="article-popup" class="hidden">
+            <button id="popup-close"><i class="fas fa-times"></i></button>
+            <div id="popup-image-wrap"></div>
+            <div id="popup-body">
+                <h3 id="popup-title"></h3>
+                <p id="popup-summary"></p>
+                <div id="popup-meta">
+                    <span id="popup-source"></span>
+                    <span id="popup-time"></span>
+                </div>
+                <div id="popup-footer">
+                    <span id="popup-location"><i class="fas fa-map-marker-alt"></i></span>
+                    <a id="popup-link" href="#" target="_blank" class="popup-read-btn">Read Full Article <i class="fas fa-external-link-alt"></i></a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Glass Sidebar -->
+        <div id="news-sidebar" class="sidebar-expanded">
+            <div id="sidebar-content">
+                <div id="sidebar-header">
+                    <div class="sidebar-header-top">
+                        <h3><i id="sidebar-cat-icon" class="fas fa-globe"></i> <span id="sidebar-cat-name">Latest Headlines</span></h3>
+                        <button id="sidebar-collapse-btn" title="Collapse Sidebar"><i class="fas fa-chevron-right"></i></button>
+                    </div>
+                    <div class="sidebar-stats">
+                        <span id="globe-pin-count" class="stat-pill stat-globe"><i class="fas fa-map-pin"></i> <span>0</span> on globe</span>
+                        <span id="sidebar-only-count" class="stat-pill stat-sidebar"><i class="fas fa-list"></i> <span>0</span> more</span>
+                    </div>
+                </div>
+
+                <div class="sidebar-section" id="section-globe">
+                    <div class="section-label"><i class="fas fa-globe-americas"></i> On the Globe <span class="section-hint">click to fly</span></div>
+                    <div id="globe-articles"></div>
+                </div>
+                <div class="sidebar-section" id="section-sidebar">
+                    <div class="section-label"><i class="fas fa-newspaper"></i> More Headlines <span class="section-hint">no location</span></div>
+                    <div id="unloc-articles"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Collapsed Sidebar Toggle -->
+        <button id="sidebar-open-btn" class="hidden" title="Open News Panel">
+            <i class="fas fa-newspaper"></i>
+            <span id="sidebar-badge">0</span>
+        </button>
+    </div>
+
+    <!-- Premium Loading Overlay -->
+    <div class="overlay hidden" id="loading">
+        <div class="loader-inner">
+            <div class="loader-globe">
+                <div class="loader-ring ring-1"></div>
+                <div class="loader-ring ring-2"></div>
+                <div class="loader-ring ring-3"></div>
+                <i class="fas fa-globe-americas loader-globe-icon"></i>
+            </div>
+            <p class="loader-headline" id="loader-headline">Scanning the globe…</p>
+            <p class="loader-sub" id="loader-sub">Connecting to live news streams across 195 countries</p>
+            <div class="loader-progress">
+                <div class="loader-progress-bar"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom Search Bar -->
+    <div id="bottom-search-bar">
+        <div class="bottom-search-glass">
+            <i class="fas fa-search bottom-search-icon"></i>
+            <input type="text" id="news-search-input" placeholder="Search global news… e.g. G20, SpaceX, Climate" autocomplete="off">
+            <button id="search-clear-btn" class="hidden" title="Clear"><i class="fas fa-times"></i></button>
+            <button id="search-submit-btn" title="Search news"><i class="fas fa-arrow-right"></i> Search</button>
+        </div>
+    </div>
+
+    <!-- Globe.gl -->
+    <script src="//unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
     <!-- Custom Scripts -->
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script src="{{ url_for('static', filename='script.js') }}?v=22"></script>
 </body>
 
 </html>

@@ -1,8 +1,5 @@
 from datetime import datetime
-from typing import Dict, Any
-
-# Simple in-memory cache
-NEWS_CACHE: Dict[str, Dict[str, Any]] = {}
+from typing import Dict
 
 # Application Metrics Tracker
 APP_METRICS: Dict[str, int] = {
