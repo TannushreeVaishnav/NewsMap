@@ -234,13 +234,14 @@ function showArticlePopup(d) {
     }
 }
 
+
 document.getElementById('popup-close').addEventListener('click', () => {
     document.getElementById('article-popup').classList.add('hidden');
     highlightMarker(null);
     startAutoRotate();
 });
 
-// ── NUKE SCENE ────────────────────────────────────────────────
+// ── NUKE SCENE ────────────────────────────────────────────
 function nukeSceneHtmlObjects() {
     const scene = globeInstance.scene();
     const toRemove = [];
@@ -256,7 +257,7 @@ function nukeSceneHtmlObjects() {
     document.querySelectorAll('.globe-marker').forEach(el => el.remove());
 }
 
-// ── RENDER NEWS DATA ──────────────────────────────────────────
+// ── RENDER NEWS DATA ────────────────────────────────────────────
 function renderNewsData(data, category) {
     const catConfig = categoryConfig[category] || categoryConfig['general'];
     currentCategory = category;
@@ -286,18 +287,18 @@ function renderNewsData(data, category) {
         return;
     }
 
-    // Group articles by cluster_id for sidebar display
-    const clusterGroups = {};
     const rawGlobePoints = [];
-    const unlocatedArticles = [];
+    const locatedArticles = [];   // has location → globe + sidebar top
+    const unlocatedArticles = []; // no location → sidebar bottom only
 
     data.articles.forEach((article, index) => {
-        if (article.location && article.location.lat && article.location.lon) {
-            const locName = article.location.name || 'Unknown';
+        const loc = article.location;
+        if (loc && loc.lat && loc.lon) {
+            const locName = loc.name || 'Unknown';
             const locShort = shortLocation(locName);
             const point = {
-                lat: article.location.lat,
-                lng: article.location.lon,
+                lat: loc.lat,
+                lng: loc.lon,
                 color: catConfig.color,
                 title: article.title,
                 summary: article.summary,
@@ -308,35 +309,38 @@ function renderNewsData(data, category) {
                 locationName: locShort,
                 locationShort: locShort.split(',')[0],
                 sentiment_score: article.sentiment_score || 0.0,
-                cluster_id: article.cluster_id,
+                cluster_id: article.cluster_id || `solo_${index}`,
                 index, category
             };
             rawGlobePoints.push(point);
-
-            // Group into sidebar clusters
-            const cid = article.cluster_id || `solo_${index}`;
-            if (!clusterGroups[cid]) clusterGroups[cid] = [];
-            clusterGroups[cid].push({ article, point });
+            locatedArticles.push({ article, point, index });
         } else {
             unlocatedArticles.push({ article, index });
         }
     });
 
-    // Apply spatial pin clustering for globe rendering
+    // Spatial pin clustering for globe
     const globePoints = clusterPoints(rawGlobePoints);
-
     requestAnimationFrame(() => {
         nukeSceneHtmlObjects();
         globeInstance.htmlElementsData(globePoints);
-        globeInstance.labelsData(rawGlobePoints); // labels use originals
+        globeInstance.labelsData(rawGlobePoints);
     });
 
-    // ── Sidebar: "On the Globe" clustered cards ──
+    // ── Sidebar section 1: "On the Globe" ──
+    // Group located articles by cluster_id for "N sources" badges
+    const clusterGroups = {};
+    locatedArticles.forEach(({ article, point, index }) => {
+        const cid = article.cluster_id || `solo_${index}`;
+        if (!clusterGroups[cid]) clusterGroups[cid] = [];
+        clusterGroups[cid].push({ article, point });
+    });
+
     if (Object.keys(clusterGroups).length === 0) {
-        globeArticlesEl.innerHTML = `<div class="sidebar-empty-sm"><i class="fas fa-map-marker-alt"></i> No geo-located articles</div>`;
+        globeArticlesEl.innerHTML = `<div class="sidebar-empty-sm"><i class="fas fa-map-marker-alt"></i> No geo-located articles for this category</div>`;
     } else {
         Object.values(clusterGroups).forEach(group => {
-            const card = createSidebarCard(group[0].article, catConfig, true, group.length, group);
+            const card = createSidebarCard(group[0].article, catConfig, true, group.length);
             card.addEventListener('click', (e) => {
                 if (e.target.closest('.read-more-btn')) return;
                 stopAutoRotate();
@@ -347,7 +351,7 @@ function renderNewsData(data, category) {
         });
     }
 
-    // ── Sidebar: "More Headlines" (unlocated) ──
+    // ── Sidebar section 2: "More Headlines" (unlocated) ──
     if (unlocatedArticles.length === 0) {
         document.getElementById('section-sidebar').style.display = 'none';
     } else {
@@ -355,10 +359,13 @@ function renderNewsData(data, category) {
         unlocatedArticles.forEach(({ article }) => {
             const pseudoPoint = {
                 title: article.title, summary: article.summary,
-                source: article.source || 'Unknown', published_at: article.published_at,
-                image_url: article.image_url, url: article.url, locationName: 'Unknown', category
+                source: article.source || 'Unknown',
+                published_at: article.published_at,
+                image_url: article.image_url,
+                url: article.url,
+                locationName: 'Unknown', category
             };
-            const card = createSidebarCard(article, catConfig, false, 1, null);
+            const card = createSidebarCard(article, catConfig, false, 1);
             card.addEventListener('click', (e) => {
                 if (e.target.closest('.read-more-btn')) return;
                 highlightCard(card);
@@ -368,8 +375,7 @@ function renderNewsData(data, category) {
         });
     }
 
-    const locCount = Object.values(clusterGroups).reduce((s, g) => s + g.length, 0);
-    updateCounts(locCount, unlocatedArticles.length);
+    updateCounts(locatedArticles.length, unlocatedArticles.length);
 
     if (rawGlobePoints.length > 0) {
         globeInstance.pointOfView({ lat: rawGlobePoints[0].lat, lng: rawGlobePoints[0].lng, altitude: 2.0 }, 1000);
