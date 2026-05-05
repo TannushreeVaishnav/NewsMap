@@ -1,42 +1,118 @@
 import os
-from flask import Flask, jsonify, request, render_template
-from dotenv import load_dotenv
-from geopy.geocoders import Nominatim
-from collections import Counter
-from datetime import datetime, timedelta, date
-import threading
 import time
 import logging
+import threading
+import hashlib
+import json
 import requests
+from datetime import datetime, timedelta, date
+from collections import defaultdict
+from urllib.parse import urlparse
 
-# Configure production logging
-logging.basicConfig(level=logging.INFO, 
+from flask import Flask, jsonify, request, render_template, make_response
+from flask_cors import CORS
+from dotenv import load_dotenv
+from geopy.geocoders import Nominatim
+from apscheduler.schedulers.background import BackgroundScheduler
+
+import db
+from metrics import APP_METRICS, APP_START_TIME
+
+# ─── LOGGING ────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO,
                     format='[%(asctime)s] %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
-# Load Environment Variables
+# ─── ENVIRONMENT ─────────────────────────────────────────────
 load_dotenv()
 WORLD_NEWS_API_KEY = os.getenv("WORLD_NEWS_API")
 
-# Initialize Flask Server
+# ─── FLASK ───────────────────────────────────────────────────
 app = Flask(__name__)
-from flask_cors import CORS
 CORS(app)
 
-from metrics import APP_METRICS, APP_START_TIME
-import db  # SQLite database layer
+# ─── VADER SENTIMENT ─────────────────────────────────────────
+try:
+    from nltk.sentiment.vader import SentimentIntensityAnalyzer
+    import nltk
+    nltk.download('vader_lexicon', quiet=True)
+    _sia = SentimentIntensityAnalyzer()
+    def get_sentiment(text: str) -> float:
+        """Return compound sentiment score in [-1.0, 1.0]."""
+        if not text:
+            return 0.0
+        return _sia.polarity_scores(text)['compound']
+    logger.info("VADER sentiment analyzer loaded")
+except Exception as e:
+    logger.warning(f"VADER unavailable: {e}. Sentiment will default to 0.0")
+    def get_sentiment(text: str) -> float:
+        return 0.0
+
+# ─── TF-IDF STORY CLUSTERING ─────────────────────────────────
+def cluster_articles(articles: list, threshold: float = 0.35) -> list:
+    """
+    Group articles by topic similarity using TF-IDF + cosine similarity.
+    Assigns a cluster_id to each article. Articles in the same cluster
+    are covering the same story from different sources.
+    """
+    if len(articles) < 2:
+        for a in articles:
+            a['cluster_id'] = a.get('url', str(id(a)))[:40]
+        return articles
+
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+        import numpy as np
+
+        corpus = [f"{a.get('title','')} {a.get('summary','')}" for a in articles]
+        vectorizer = TfidfVectorizer(stop_words='english', max_features=3000)
+        matrix = vectorizer.fit_transform(corpus)
+        sim = cosine_similarity(matrix)
+
+        visited = [False] * len(articles)
+        cluster_map = {}  # article_index -> cluster_id
+
+        cluster_num = 0
+        for i in range(len(articles)):
+            if visited[i]:
+                continue
+            cluster_id = f"c{cluster_num}"
+            cluster_num += 1
+            cluster_map[i] = cluster_id
+            visited[i] = True
+            for j in range(i + 1, len(articles)):
+                if not visited[j] and sim[i, j] >= threshold:
+                    cluster_map[j] = cluster_id
+                    visited[j] = True
+
+        for i, art in enumerate(articles):
+            art['cluster_id'] = cluster_map.get(i, f"c{i}")
+
+    except ImportError:
+        for i, art in enumerate(articles):
+            art['cluster_id'] = f"c{i}"
+
+    return articles
+
 
 # ─── CONFIGURATION ──────────────────────────────────────────
-REFRESH_INTERVAL_HOURS = 4        # Fetch fresh news every 4 hours
-CLEANUP_HOUR = 0                  # Run cleanup at midnight (00:00)
-KEEP_DAYS = 3                     # Keep articles for 3 days
+REFRESH_INTERVAL_HOURS = 4
+KEEP_DAYS = 3
 ALL_CATEGORIES = ['general', 'politics', 'sports', 'technology', 'entertainment', 'health', 'business']
 
+CATEGORY_KEYWORDS = {
+    'general':       'world news today',
+    'politics':      'politics election government parliament',
+    'sports':        'sports cricket football IPL olympics',
+    'technology':    'technology AI software startup',
+    'entertainment': 'entertainment movies celebrity music',
+    'health':        'health medical disease WHO healthcare',
+    'business':      'business economy market finance stock',
+}
+
 # ─── SOURCE → LOCATION FALLBACK MAP ─────────────────────────
-# When NLP can't find a location, use the news source as a hint
 SOURCE_LOCATION_MAP = {
-    # Indian sources
     "times of india":       {"name": "India", "lat": 20.5937, "lon": 78.9629},
     "the times of india":   {"name": "India", "lat": 20.5937, "lon": 78.9629},
     "hindustan times":      {"name": "New Delhi, India", "lat": 28.6139, "lon": 77.2090},
@@ -66,7 +142,6 @@ SOURCE_LOCATION_MAP = {
     "wion":                 {"name": "New Delhi, India", "lat": 28.6139, "lon": 77.2090},
     "ani":                  {"name": "New Delhi, India", "lat": 28.6139, "lon": 77.2090},
     "pti":                  {"name": "New Delhi, India", "lat": 28.6139, "lon": 77.2090},
-    # International sources
     "bbc":                  {"name": "London, UK", "lat": 51.5074, "lon": -0.1278},
     "bbc news":             {"name": "London, UK", "lat": 51.5074, "lon": -0.1278},
     "cnn":                  {"name": "Atlanta, USA", "lat": 33.7490, "lon": -84.3880},
@@ -79,7 +154,6 @@ SOURCE_LOCATION_MAP = {
     "bloomberg":            {"name": "New York, USA", "lat": 40.7128, "lon": -74.0060},
     "cnbc":                 {"name": "New Jersey, USA", "lat": 40.7357, "lon": -74.1724},
     "forbes":               {"name": "New York, USA", "lat": 40.7128, "lon": -74.0060},
-    # Entertainment / Health / Sports generic sources
     "bollywood hungama":    {"name": "Mumbai, India", "lat": 19.0760, "lon": 72.8777},
     "pinkvilla":            {"name": "Mumbai, India", "lat": 19.0760, "lon": 72.8777},
     "koimoi":               {"name": "Mumbai, India", "lat": 19.0760, "lon": 72.8777},
@@ -94,35 +168,28 @@ SOURCE_LOCATION_MAP = {
 }
 
 
-def get_location_from_source(source_name):
-    """Try to get a location from the news source name."""
+def get_location_from_source(source_name: str):
     if not source_name:
         return None
     key = source_name.lower().strip()
-    # Exact match
     if key in SOURCE_LOCATION_MAP:
         return SOURCE_LOCATION_MAP[key].copy()
-    # Partial match (e.g., 'The Times of India - Sports' matches 'times of india')
     for src, loc in SOURCE_LOCATION_MAP.items():
         if src in key or key in src:
             return loc.copy()
     return None
 
 
-# ─── INITIALIZE MODELS & DATABASE ───────────────────────────
+# ─── DATABASE & GEO INIT ─────────────────────────────────────
 logger.info("Initializing database...")
-geolocator = Nominatim(user_agent="geo_news_dashboard_flask_api")
-
-# Initialize SQLite database tables
 db.init_db()
 
-# Global lock for Nominatim API rate limiting
+geolocator = Nominatim(user_agent="geo_news_dashboard_v2")
 geocode_lock = threading.Lock()
 
 
-def geocode_location(place_name):
-    """Geocode a place name using cache → Nominatim fallback."""
-    if not place_name or not geolocator:
+def geocode_location(place_name: str):
+    if not place_name:
         return None
     cached = db.get_cached_geocode(place_name)
     if cached:
@@ -145,7 +212,6 @@ def geocode_location(place_name):
 
 @app.route('/', methods=['GET'])
 def home():
-    """Serve the interactive Map Dashboard."""
     return render_template('index.html')
 
 
@@ -167,70 +233,110 @@ def log_request(response):
 @app.route('/api/news', methods=['GET'])
 def get_news():
     """
-    API Endpoint: /api/news?category=technology
-    
-    Serves news INSTANTLY from SQLite database.
-    If no data exists yet (first run), triggers a live fetch.
+    Serve news from DB instantly (stale-while-revalidate).
+    Supports ETag conditional requests to skip rendering if unchanged.
     """
     category = request.args.get('category', 'general')
-    logger.info(f"Request received for category: {category}")
-    
-    # ── STEP 1: Try to serve from database (INSTANT — < 50ms) ──
+
+    # ── Stale-While-Revalidate: serve DB instantly, refresh in background ──
     db_data = db.get_articles(category)
+
     if db_data and db_data["total_results"] > 0:
         APP_METRICS["cache_hits"] += 1
-        logger.info(f"Serving {db_data['total_results']} articles from DATABASE for '{category}' (instant)")
-        return jsonify(db_data)
-    
-    # ── STEP 2: No data in DB yet — do a live fetch (first-time only) ──
+        etag = db_data.get("etag", "")
+
+        # Check If-None-Match (ETag) header — skip re-render if unchanged
+        client_etag = request.headers.get("If-None-Match", "")
+        if client_etag and client_etag == etag:
+            return make_response("", 304)
+
+        # If stale (older than REFRESH_INTERVAL_HOURS), refresh in background
+        last_fetch = db.get_last_fetch_time(category)
+        if last_fetch and (datetime.now() - last_fetch) > timedelta(hours=REFRESH_INTERVAL_HOURS):
+            logger.info(f"Stale data for '{category}', triggering background refresh")
+            t = threading.Thread(target=fetch_and_store_category, args=(category,), daemon=True)
+            t.start()
+
+        logger.info(f"Serving {db_data['total_results']} articles from DB for '{category}'")
+        response = make_response(jsonify(db_data))
+        if etag:
+            response.headers["ETag"] = etag
+        return response
+
+    # ── First-time fetch ──
     logger.info(f"No DB data for '{category}', performing live fetch...")
-    response_data = fetch_and_store_category(category)
-    if "error" in response_data:
+    result = fetch_and_store_category(category)
+    if "error" in result:
         APP_METRICS["api_errors"] += 1
-        return jsonify(response_data), 500
-        
-    return jsonify(response_data)
+        return jsonify(result), 500
+    return jsonify(result)
 
 
 @app.route('/api/search', methods=['GET'])
 def search_news():
     """
-    API Endpoint: /api/search?q=keyword
-    
-    Searches news using World News API, processes them for geo-location,
-    and returns them immediately (no persistent DB caching to avoid clutter, 
-    or you could cache if desired, but transient is fine for search).
+    Hybrid search: TF-IDF local cache first, then World News API fallback.
     """
     query = request.args.get('q', '').strip()
     if not query:
         return jsonify({"error": "Query parameter 'q' is required"}), 400
-        
-    logger.info(f"Search request received for: {query}")
-    
+
+    logger.info(f"Search request: '{query}'")
+
+    # ── Step 1: Local TF-IDF search ──
+    local_results = db.search_articles_local(query, limit=15)
+
+    if len(local_results) >= 5:
+        logger.info(f"Local TF-IDF search returned {len(local_results)} results for '{query}'")
+        # Enrich with sentiment scores for search results too
+        for art in local_results:
+            if art.get('sentiment_score', 0.0) == 0.0:
+                art['sentiment_score'] = get_sentiment(f"{art.get('title','')} {art.get('summary','')}")
+        return jsonify({
+            "status": "success",
+            "category": "search",
+            "query": query,
+            "source": "local_cache",
+            "total_results": len(local_results),
+            "articles": local_results
+        })
+
+    # ── Step 2: Fallback to World News API ──
+    logger.info(f"Local results sparse ({len(local_results)}), falling back to World News API")
     if not WORLD_NEWS_API_KEY:
-        logger.error("WORLD_NEWS_API key is missing.")
         return jsonify({"error": "World News API key not configured"}), 500
-        
-    response_data = fetch_world_news_search(query)
-    if "error" in response_data:
-        APP_METRICS["api_errors"] += 1
-        return jsonify(response_data), 500
-        
-    return jsonify(response_data)
+
+    api_results = _fetch_world_news_search(query)
+    if "error" in api_results:
+        # If API also fails but we have local results, return them
+        if local_results:
+            return jsonify({
+                "status": "success",
+                "category": "search",
+                "query": query,
+                "source": "local_cache_fallback",
+                "total_results": len(local_results),
+                "articles": local_results
+            })
+        return jsonify(api_results), 500
+
+    # Merge: put API results first, then unique local results
+    api_urls = {a['url'] for a in api_results.get('articles', [])}
+    extra_local = [a for a in local_results if a['url'] not in api_urls]
+    merged = api_results.get('articles', []) + extra_local
+    api_results['articles'] = merged[:15]
+    api_results['total_results'] = len(api_results['articles'])
+    api_results['source'] = 'api+local'
+    return jsonify(api_results)
 
 
 @app.route('/api/status', methods=['GET'])
 def get_data_status():
-    """
-    Frontend can poll this to check if data is ready.
-    Returns which categories have data in the DB.
-    """
     ready_categories = []
     for cat in ALL_CATEGORIES:
         data = db.get_articles(cat)
         if data and data["total_results"] > 0:
             ready_categories.append(cat)
-    
     return jsonify({
         "ready": len(ready_categories) == len(ALL_CATEGORIES),
         "ready_categories": ready_categories,
@@ -240,7 +346,6 @@ def get_data_status():
 
 @app.route('/metrics', methods=['GET'])
 def get_metrics():
-    """API Endpoint for Server Health and Monitoring."""
     db_stats = db.get_db_stats()
     return jsonify({
         "status": "healthy",
@@ -256,28 +361,77 @@ def get_metrics():
 
 
 # ═══════════════════════════════════════════════════════════════
-#  CORE FETCH + STORE LOGIC
+#  CORE FETCH + PROCESS LOGIC
 # ═══════════════════════════════════════════════════════════════
 
+def _process_raw_articles(raw_articles: list, category: str) -> list:
+    """
+    Shared processing pipeline: extract location, sentiment, keywords.
+    Used by both category fetches and search.
+    """
+    processed = []
+    for a in raw_articles:
+        title = a.get('title', '')
+        url = a.get('url', '')
+        if not title or not url:
+            continue
+
+        # ── Location: use API-provided lat/lon first ──
+        lat = a.get('latitude')
+        lon = a.get('longitude')
+        location_info = None
+        if lat and lon:
+            location_info = {
+                "name": a.get('location_name') or f"{lat:.2f},{lon:.2f}",
+                "lat": lat,
+                "lon": lon
+            }
+        else:
+            # Fallback: source headquarters
+            try:
+                domain = urlparse(url).netloc.replace('www.', '')
+                location_info = get_location_from_source(domain)
+            except Exception:
+                pass
+
+        # ── Summary ──
+        summary = a.get('summary') or a.get('text', '')
+        if len(summary) > 500:
+            summary = summary[:500] + '...'
+
+        # ── Source domain ──
+        try:
+            source = urlparse(url).netloc.replace('www.', '')
+        except Exception:
+            source = a.get('author', 'Unknown')
+
+        # ── Sentiment ──
+        sentiment = get_sentiment(f"{title} {summary}")
+
+        processed.append({
+            "title": title,
+            "url": url,
+            "image_url": a.get('image', ''),
+            "source": source,
+            "published_at": a.get('publish_date', ''),
+            "summary": summary or 'No summary available.',
+            "keywords": [],
+            "location": location_info,
+            "sentiment_score": sentiment,
+            "cluster_id": None  # Set by cluster_articles()
+        })
+
+    # ── Story Clustering ──
+    processed = cluster_articles(processed)
+    return processed
+
+
 def fetch_and_store_category(category: str) -> dict:
-    """
-    Fetch news from World News API, optionally geocode, store in SQLite.
-    """
+    """Fetch from World News API, process, and store to DB."""
     if not WORLD_NEWS_API_KEY:
         return {"error": "WORLD_NEWS_API key not configured"}
 
-    # Category → search keywords mapping
-    category_keywords = {
-        'general':       'world news',
-        'politics':      'politics election government parliament',
-        'sports':        'sports cricket football IPL olympics',
-        'technology':    'technology AI software startup',
-        'entertainment': 'entertainment movies celebrity music',
-        'health':        'health medical disease WHO healthcare',
-        'business':      'business economy market finance stock',
-    }
-    keyword = category_keywords.get(category, 'world news')
-
+    keyword = CATEGORY_KEYWORDS.get(category, 'world news')
     try:
         resp = requests.get(
             "https://api.worldnewsapi.com/search-news",
@@ -295,64 +449,14 @@ def fetch_and_store_category(category: str) -> dict:
             return {"error": f"World News API error {resp.status_code}: {resp.text[:200]}"}
 
         raw_articles = resp.json().get('news', [])
-        processed_news = []
+        processed = _process_raw_articles(raw_articles, category)
 
-        for a in raw_articles:
-            title = a.get('title', '')
-            url   = a.get('url', '')
-            if not title or not url:
-                continue
-
-            # World News API provides lat/lon directly
-            lat = a.get('latitude')
-            lon = a.get('longitude')
-            location_info = None
-
-            if lat and lon:
-                location_info = {
-                    "name": a.get('location_name') or f"{lat:.2f},{lon:.2f}",
-                    "lat": lat,
-                    "lon": lon
-                }
-            else:
-                # Fallback: source headquarters
-                source_name = a.get('source_country') or ''
-                try:
-                    domain = a.get('url', '')
-                    from urllib.parse import urlparse
-                    domain = urlparse(domain).netloc.replace('www.', '')
-                    location_info = get_location_from_source(domain)
-                except Exception:
-                    pass
-
-            summary = a.get('summary') or a.get('text', '')
-            if len(summary) > 500:
-                summary = summary[:500] + '...'
-
-            # Extract source from URL domain
-            try:
-                from urllib.parse import urlparse
-                source = urlparse(url).netloc.replace('www.', '')
-            except Exception:
-                source = 'Unknown'
-
-            processed_news.append({
-                "title": title,
-                "url": url,
-                "image_url": a.get('image', ''),
-                "source": source,
-                "published_at": a.get('publish_date', ''),
-                "summary": summary or 'No summary available.',
-                "keywords": [],
-                "location": location_info
-            })
-
-        db.save_articles(category, processed_news)
+        db.save_articles(category, processed)
         return {
             "status": "success",
             "category": category,
-            "total_results": len(processed_news),
-            "articles": processed_news
+            "total_results": len(processed),
+            "articles": processed
         }
 
     except Exception as e:
@@ -361,86 +465,31 @@ def fetch_and_store_category(category: str) -> dict:
         return {"error": str(e)}
 
 
-def fetch_world_news_search(query: str) -> dict:
-    """
-    Fetch news from World News API based on search query, process articles for location.
-    """
+def _fetch_world_news_search(query: str) -> dict:
+    """Fetch from World News API for a search query."""
     try:
-        url = "https://api.worldnewsapi.com/search-news"
-        params = {
-            "text": query,
-            "language": "en",
-            "api-key": WORLD_NEWS_API_KEY,
-            "number": 15
-        }
-        
-        response = requests.get(url, params=params, timeout=15)
-        if response.status_code != 200:
-            logger.error(f"World News API Error: {response.text}")
-            return {"error": "Failed to fetch from World News API"}
-            
-        data = response.json()
-        articles_data = data.get('news', [])
-        
-        processed_news = []
-        for article in articles_data:
-            title = article.get('title', '')
-            url = article.get('url', '')
-            image_url = article.get('image', '')
-            source = article.get('author', 'Unknown') # World News API sometimes uses author or source
-            if not source or source == 'Unknown':
-                # Try to extract domain as source
-                try:
-                    from urllib.parse import urlparse
-                    domain = urlparse(url).netloc
-                    source = domain.replace('www.', '') if domain else 'Unknown'
-                except:
-                    pass
-            
-            published_at = article.get('publish_date', '')
-            summary = article.get('summary') or article.get('text', '')
-            
-            if not title or not url:
-                continue
-                
-            # Truncate summary if it's too long (World News API 'text' can be the full article)
-            if len(summary) > 500:
-                summary = summary[:500] + "..."
-                
-            # Extract location directly from World News API response
-            lat = article.get('latitude')
-            lon = article.get('longitude')
-            location_info = None
+        resp = requests.get(
+            "https://api.worldnewsapi.com/search-news",
+            params={
+                "text": query,
+                "language": "en",
+                "api-key": WORLD_NEWS_API_KEY,
+                "number": 15
+            },
+            timeout=15
+        )
+        if resp.status_code != 200:
+            return {"error": f"World News API error {resp.status_code}"}
 
-            if lat and lon:
-                location_info = {
-                    "name": article.get('location_name') or f"{lat:.2f},{lon:.2f}",
-                    "lat": lat,
-                    "lon": lon
-                }
-            else:
-                if source:
-                    location_info = get_location_from_source(source)
-                 
-            processed_news.append({
-                "title": title,
-                "url": url,
-                "image_url": image_url,
-                "source": source,
-                "published_at": published_at,
-                "summary": summary if summary else "No summary available.",
-                "keywords": [], # WorldNewsAPI doesn't return keywords in basic search usually
-                "location": location_info
-            })
-            
+        raw_articles = resp.json().get('news', [])
+        processed = _process_raw_articles(raw_articles, 'search')
         return {
             "status": "success",
             "category": "search",
             "query": query,
-            "total_results": len(processed_news),
-            "articles": processed_news
+            "total_results": len(processed),
+            "articles": processed
         }
-        
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -448,75 +497,70 @@ def fetch_world_news_search(query: str) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  BACKGROUND SCHEDULER
+#  APSCHEDULER BACKGROUND JOBS
 # ═══════════════════════════════════════════════════════════════
 
-def should_refresh(category: str) -> bool:
-    """Check if a category needs refreshing (older than REFRESH_INTERVAL_HOURS)."""
+def _refresh_category_job(category: str):
+    """Scheduled job to refresh a single category."""
     last_fetch = db.get_last_fetch_time(category)
-    if last_fetch is None:
-        return True
-    return (datetime.now() - last_fetch) > timedelta(hours=REFRESH_INTERVAL_HOURS)
+    if last_fetch and (datetime.now() - last_fetch) < timedelta(hours=REFRESH_INTERVAL_HOURS):
+        logger.info(f"[Scheduler] '{category}' still fresh, skipping")
+        return
+    logger.info(f"[Scheduler] Refreshing '{category}'...")
+    fetch_and_store_category(category)
 
 
-def run_background_scheduler():
-    """
-    Background daemon thread that:
-    1. On startup: Fetches ALL categories to warm the database
-    2. Every 4 hours: Refreshes stale categories
-    3. At midnight: Cleans up articles older than KEEP_DAYS
-    """
-    logger.info("=" * 50)
-    logger.info("BACKGROUND SCHEDULER STARTED")
-    logger.info("=" * 50)
-    
-    # ── INITIAL WARM-UP: Pre-fetch all categories ──
-    for cat in ALL_CATEGORIES:
-        if should_refresh(cat):
-            logger.info(f"[Startup] Pre-fetching '{cat}' into database...")
-            fetch_and_store_category(cat)
-            time.sleep(3)  # Be gentle with APIs
-        else:
-            logger.info(f"[Startup] '{cat}' already fresh in database, skipping")
-    
-    logger.info("=" * 50)
-    logger.info("ALL CATEGORIES LOADED — Ready to serve instantly!")
-    logger.info("=" * 50)
-    
-    # ── CONTINUOUS LOOP ──
-    last_cleanup_date = None
-    
-    while True:
-        now = datetime.now()
-        
-        # ── MIDNIGHT CLEANUP ──
-        if now.hour == CLEANUP_HOUR and last_cleanup_date != date.today():
-            logger.info("Running midnight cleanup...")
-            db.cleanup_old_articles(keep_days=KEEP_DAYS)
-            last_cleanup_date = date.today()
-        
-        # ── REFRESH STALE CATEGORIES ──
-        for cat in ALL_CATEGORIES:
-            if should_refresh(cat):
-                logger.info(f"[Scheduler] Refreshing '{cat}'...")
-                fetch_and_store_category(cat)
-                time.sleep(5)  # Pause between categories
-        
-        # Sleep for 15 minutes, then check again
-        logger.info("Scheduler sleeping for 15 minutes...")
-        time.sleep(900)
+def _cleanup_job():
+    """Scheduled midnight cleanup."""
+    logger.info("[Scheduler] Running cleanup job...")
+    db.cleanup_old_articles(keep_days=KEEP_DAYS)
+
+
+def start_scheduler():
+    """Configure APScheduler with per-category jobs + jitter to avoid thundering herd."""
+    scheduler = BackgroundScheduler()
+
+    import random
+    for i, cat in enumerate(ALL_CATEGORIES):
+        # Stagger initial warmup: 0, 5, 10, 15, ... seconds
+        # Then each category refreshes every 4h ± 15min jitter
+        jitter_seconds = random.randint(-900, 900)
+        interval_seconds = REFRESH_INTERVAL_HOURS * 3600 + jitter_seconds
+
+        scheduler.add_job(
+            func=_refresh_category_job,
+            args=[cat],
+            trigger='interval',
+            seconds=interval_seconds,
+            id=f"refresh_{cat}",
+            replace_existing=True,
+            next_run_time=datetime.now() + timedelta(seconds=i * 5)  # stagger startup
+        )
+
+    # Daily midnight cleanup
+    scheduler.add_job(
+        func=_cleanup_job,
+        trigger='cron',
+        hour=0,
+        minute=0,
+        id='nightly_cleanup',
+        replace_existing=True
+    )
+
+    scheduler.start()
+    logger.info("APScheduler started with jitter-based refresh jobs")
+    return scheduler
 
 
 # ═══════════════════════════════════════════════════════════════
-#  MAIN ENTRY POINT
+#  MAIN
 # ═══════════════════════════════════════════════════════════════
 
 if __name__ == '__main__':
-    # Start the background scheduler thread
-    scheduler_thread = threading.Thread(target=run_background_scheduler, daemon=True)
-    scheduler_thread.start()
+    scheduler = start_scheduler()
 
     logger.info("=" * 50)
     logger.info("FLASK BACKEND RUNNING ON http://127.0.0.1:5000")
     logger.info("=" * 50)
+
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)

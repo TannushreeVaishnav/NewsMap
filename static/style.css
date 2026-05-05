@@ -228,6 +228,7 @@ body, html {
     align-items: center;
     pointer-events: auto;
     z-index: 10;
+    position: relative;
 }
 .globe-marker:hover .marker-pin { transform: scale(1.3) translateY(-4px); filter: drop-shadow(0 0 12px currentColor); }
 .globe-marker.active-marker { z-index: 200; }
@@ -251,6 +252,39 @@ body, html {
     backdrop-filter: blur(6px);
     letter-spacing: 0.3px;
     transition: all 0.3s ease;
+}
+
+/* ── Breaking Pulse Ring ── */
+.pulse-ring {
+    position: absolute;
+    top: -4px; left: 50%; transform: translateX(-50%);
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    border: 2px solid;
+    animation: sonarPing 1.6s ease-out infinite;
+    pointer-events: none;
+}
+@keyframes sonarPing {
+    0%   { transform: translateX(-50%) scale(0.6); opacity: 1; }
+    100% { transform: translateX(-50%) scale(2.2); opacity: 0; }
+}
+
+/* ── Cluster Pin ── */
+.cluster-pin {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    border: 2px solid;
+    background: rgba(8,12,22,0.8);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 800;
+    backdrop-filter: blur(8px);
+    transition: all 0.3s ease;
+    animation: clusterGlow 2s ease-in-out infinite;
+}
+.cluster-pin:hover { transform: scale(1.25); }
+@keyframes clusterGlow {
+    0%,100% { box-shadow: 0 0 8px currentColor; }
+    50%      { box-shadow: 0 0 20px currentColor; }
 }
 
 /* ══ ARTICLE POPUP ══ */
@@ -387,7 +421,17 @@ body, html {
 .sidebar-card.has-location { cursor:pointer; }
 .sidebar-card.active-card { border-color:rgba(79,195,247,0.4); box-shadow:0 0 12px rgba(79,195,247,0.15); }
 
-.card-inner { border-left:3px solid #4fc3f7; }
+.card-inner { border-left:3px solid #4fc3f7; position:relative; }
+
+/* Sentiment indicator bar */
+.sentiment-bar {
+    position: absolute;
+    top: 0; right: 0;
+    width: 3px; height: 100%;
+    border-radius: 0 10px 10px 0;
+    opacity: 0.7;
+}
+
 .card-img-wrap { overflow:hidden; }
 .card-img { width:100%; height:95px; object-fit:cover; display:block; transition:transform 0.3s ease; opacity:0.85; }
 .sidebar-card:hover .card-img { transform:scale(1.03); opacity:1; }
@@ -395,16 +439,41 @@ body, html {
 .card-body { padding: 9px 11px; }
 .card-title { font-size:12.5px; font-weight:600; color:#c9d1d9; line-height:1.4; margin-bottom:3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .card-summary { font-size:11px; color:#6e7681; line-height:1.5; margin-bottom:7px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-.card-meta { display:flex; align-items:center; gap:10px; font-size:10.5px; color:#484f58; margin-bottom:7px; }
+.card-meta { display:flex; align-items:center; gap:10px; font-size:10.5px; color:#484f58; margin-bottom:7px; flex-wrap:wrap; }
 .card-source { font-weight:600; color:#4fc3f7; }
-.card-time i { margin-right:3px; }
-.card-actions { display:flex; justify-content:space-between; align-items:center; }
+.card-time { display:flex; align-items:center; gap:3px; }
+.card-actions { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px; }
 
 .loc-badge { display:inline-flex; align-items:center; gap:4px; font-size:10px; padding:3px 7px; border-radius:4px; font-weight:500; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .loc-found { color:#4fc3f7; background:rgba(79,195,247,0.08); border:1px solid rgba(79,195,247,0.12); }
 .loc-found i { color:#ef5350; font-size:9px; }
 .loc-none { color:#ffa726; background:rgba(255,167,38,0.07); border:1px solid rgba(255,167,38,0.1); }
 .loc-none i { font-size:9px; }
+
+/* Cluster badge (N sources) */
+.cluster-badge {
+    display:inline-flex; align-items:center; gap:4px;
+    font-size:10px; padding:3px 7px; border-radius:4px; font-weight:600;
+    color:#ea80fc; background:rgba(234,128,252,0.08); border:1px solid rgba(234,128,252,0.2);
+}
+.cluster-badge i { font-size:9px; }
+
+/* Breaking news badge */
+.badge-breaking {
+    display:inline-block;
+    background: rgba(255,71,87,0.15);
+    color: #ff4757;
+    font-size: 9px; font-weight: 800;
+    letter-spacing: 0.8px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(255,71,87,0.3);
+    animation: breakingPulse 1.5s ease-in-out infinite;
+    margin-right: 3px;
+}
+@keyframes breakingPulse {
+    0%,100% { opacity:1; } 50% { opacity:0.6; }
+}
 
 .read-more-btn {
     display:inline-flex; align-items:center; gap:4px;
@@ -567,4 +636,28 @@ body, html {
 }
 @media (max-width:768px) {
     #bottom-search-bar { width: calc(100vw - 32px); bottom: 16px; left: 16px; transform: none; }
+}
+
+/* ══ SEARCH HISTORY CHIPS ══ */
+#search-history-chips {
+    display: none;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 4px 8px;
+}
+.history-chip {
+    background: rgba(79,195,247,0.08);
+    border: 1px solid rgba(79,195,247,0.2);
+    color: #4fc3f7;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 11px;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: inherit;
+}
+.history-chip:hover {
+    background: rgba(79,195,247,0.2);
+    border-color: rgba(79,195,247,0.5);
 }
