@@ -351,31 +351,35 @@ function renderNewsData(data, category) {
         });
     }
 
-    // ── Sidebar section 2: "More Headlines" (unlocated) ──
-    if (unlocatedArticles.length === 0) {
-        document.getElementById('section-sidebar').style.display = 'none';
-    } else {
-        document.getElementById('section-sidebar').style.display = 'block';
-        unlocatedArticles.forEach(({ article }) => {
-            const pseudoPoint = {
-                title: article.title, summary: article.summary,
-                source: article.source || 'Unknown',
-                published_at: article.published_at,
-                image_url: article.image_url,
-                url: article.url,
-                locationName: 'Unknown', category
-            };
-            const card = createSidebarCard(article, catConfig, false, 1);
-            card.addEventListener('click', (e) => {
-                if (e.target.closest('.read-more-btn')) return;
-                highlightCard(card);
-                showArticlePopup(pseudoPoint);
-            });
-            unlocArticlesEl.appendChild(card);
-        });
-    }
+    // ── Sidebar section 2: "Latest Headlines" — ALL articles as cards ──
+    document.getElementById('section-sidebar').style.display = 'block';
+    data.articles.forEach((article, index) => {
+        const hasLoc = !!(article.location && article.location.lat && article.location.lon);
+        // Find matching globe point for click-to-fly
+        const matchedPoint = rawGlobePoints.find(p => p.url === article.url);
 
-    updateCounts(locatedArticles.length, unlocatedArticles.length);
+        const card = createSidebarCard(article, catConfig, hasLoc, 1);
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('.read-more-btn')) return;
+            highlightCard(card);
+            if (matchedPoint) {
+                stopAutoRotate();
+                showArticlePopup(matchedPoint);
+            } else {
+                showArticlePopup({
+                    title: article.title, summary: article.summary,
+                    source: article.source || 'Unknown',
+                    published_at: article.published_at,
+                    image_url: article.image_url,
+                    url: article.url,
+                    locationName: 'Unknown', category
+                });
+            }
+        });
+        unlocArticlesEl.appendChild(card);
+    });
+
+    updateCounts(locatedArticles.length, data.articles.length);
 
     if (rawGlobePoints.length > 0) {
         globeInstance.pointOfView({ lat: rawGlobePoints[0].lat, lng: rawGlobePoints[0].lng, altitude: 2.0 }, 1000);
