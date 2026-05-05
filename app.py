@@ -168,15 +168,58 @@ SOURCE_LOCATION_MAP = {
 }
 
 
+# TLD → country location fallback (for domains not in the explicit map)
+TLD_COUNTRY_MAP = {
+    ".co.uk": {"name": "United Kingdom", "lat": 51.5074, "lon": -0.1278},
+    ".uk":    {"name": "United Kingdom", "lat": 51.5074, "lon": -0.1278},
+    ".in":    {"name": "India", "lat": 20.5937, "lon": 78.9629},
+    ".au":    {"name": "Australia", "lat": -25.2744, "lon": 133.7751},
+    ".ca":    {"name": "Canada", "lat": 56.1304, "lon": -106.3468},
+    ".de":    {"name": "Germany", "lat": 51.1657, "lon": 10.4515},
+    ".fr":    {"name": "France", "lat": 46.2276, "lon": 2.2137},
+    ".jp":    {"name": "Japan", "lat": 36.2048, "lon": 138.2529},
+    ".cn":    {"name": "China", "lat": 35.8617, "lon": 104.1954},
+    ".ru":    {"name": "Russia", "lat": 61.5240, "lon": 105.3188},
+    ".br":    {"name": "Brazil", "lat": -14.2350, "lon": -51.9253},
+    ".za":    {"name": "South Africa", "lat": -30.5595, "lon": 22.9375},
+    ".pk":    {"name": "Pakistan", "lat": 30.3753, "lon": 69.3451},
+    ".bd":    {"name": "Bangladesh", "lat": 23.6850, "lon": 90.3563},
+    ".sg":    {"name": "Singapore", "lat": 1.3521, "lon": 103.8198},
+    ".ae":    {"name": "UAE", "lat": 23.4241, "lon": 53.8478},
+    ".il":    {"name": "Israel", "lat": 31.0461, "lon": 34.8516},
+    ".ng":    {"name": "Nigeria", "lat": 9.0820, "lon": 8.6753},
+    ".ke":    {"name": "Kenya", "lat": -0.0236, "lon": 37.9062},
+    ".az":    {"name": "Azerbaijan", "lat": 40.1431, "lon": 47.5769},
+    ".tv":    {"name": "Global", "lat": 25.0, "lon": 55.0},
+    ".ie":    {"name": "Ireland", "lat": 53.1424, "lon": -7.6921},
+    ".it":    {"name": "Italy", "lat": 41.8719, "lon": 12.5674},
+    ".es":    {"name": "Spain", "lat": 40.4637, "lon": -3.7492},
+    ".nl":    {"name": "Netherlands", "lat": 52.1326, "lon": 5.2913},
+    ".kr":    {"name": "South Korea", "lat": 35.9078, "lon": 127.7669},
+    ".se":    {"name": "Sweden", "lat": 60.1282, "lon": 18.6435},
+    ".no":    {"name": "Norway", "lat": 60.4720, "lon": 8.4689},
+    ".nz":    {"name": "New Zealand", "lat": -40.9006, "lon": 174.886},
+    ".com":   {"name": "United States", "lat": 37.0902, "lon": -95.7129},
+    ".org":   {"name": "United States", "lat": 38.9072, "lon": -77.0369},
+    ".net":   {"name": "United States", "lat": 37.0902, "lon": -95.7129},
+}
+
 def get_location_from_source(source_name: str):
+    """Try to get a location from the news source name or domain TLD."""
     if not source_name:
         return None
     key = source_name.lower().strip()
+    # Exact match
     if key in SOURCE_LOCATION_MAP:
         return SOURCE_LOCATION_MAP[key].copy()
+    # Partial match
     for src, loc in SOURCE_LOCATION_MAP.items():
         if src in key or key in src:
             return loc.copy()
+    # TLD-based fallback (check longest TLDs first like .co.uk before .uk)
+    for tld in sorted(TLD_COUNTRY_MAP.keys(), key=len, reverse=True):
+        if key.endswith(tld):
+            return TLD_COUNTRY_MAP[tld].copy()
     return None
 
 
